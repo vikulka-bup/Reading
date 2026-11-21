@@ -1,7 +1,6 @@
 package com.example.reading
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -22,25 +21,24 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.reading.ui.theme.DarkText
 import com.example.reading.ui.theme.PastelPink
 import com.example.reading.ui.theme.PastelPinkDark
 import com.example.reading.ui.theme.ReadingTheme
-import java.io.InputStream
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,33 +58,23 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun TxtReaderScreen(modifier: Modifier = Modifier) {
+fun TxtReaderScreen(
+    modifier: Modifier = Modifier,
+    viewModel: TxtReaderViewModel = viewModel() // Подключаем ViewModel
+) {
     val context = LocalContext.current
 
-    var fileContent by remember { mutableStateOf<String?>(null) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isReading by remember { mutableStateOf(false) }  // false = выбор, true = чтение
+    // Используем observeAsState для LiveData
+    val uiState by viewModel.uiState.observeAsState(TxtUiState())
 
+    // Лаунчер для выбора файла
     val openFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val uri: Uri? = result.data?.data
             if (uri != null) {
-                try {
-                    val text = readTextFromUri(context, uri)
-                    if (text.isBlank()) {
-                        errorMessage = "Файл пустой"
-                        fileContent = null
-                    } else {
-                        fileContent = text
-                        errorMessage = null
-                        isReading = true
-                    }
-                } catch (e: Exception) {
-                    errorMessage = "Ошибка чтения файла: ${e.message}"
-                    fileContent = null
-                }
+                viewModel.readFile(uri)
             }
         } else {
             Toast.makeText(context, "Файл не выбран", Toast.LENGTH_SHORT).show()
@@ -98,22 +86,25 @@ fun TxtReaderScreen(modifier: Modifier = Modifier) {
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        if (!isReading) {
+        // ЭКРАН ВЫБОРА ФАЙЛА
+        if (!uiState.isReading) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp) // отступ между кнопкой и ошибкой
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Button(
                         onClick = {
-                            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
-                            intent.addCategory(Intent.CATEGORY_OPENABLE)
-                            intent.type = "text/plain"
+                            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                                type = "text/plain"
+                            }
                             openFileLauncher.launch(intent)
                         },
+                        enabled = !uiState.isLoading,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = PastelPink,
                             contentColor = DarkText
@@ -122,8 +113,13 @@ fun TxtReaderScreen(modifier: Modifier = Modifier) {
                         Text("Открыть файл")
                     }
 
-                    val error = errorMessage
-                    if (error != null) {
+                    // Индикатор загрузки
+                    if (uiState.isLoading) {
+                        CircularProgressIndicator(color = PastelPink)
+                    }
+
+                    // Сообщение об ошибке
+                    uiState.errorMessage?.let { error ->
                         Text(
                             text = error,
                             color = MaterialTheme.colorScheme.error,
@@ -133,6 +129,7 @@ fun TxtReaderScreen(modifier: Modifier = Modifier) {
                 }
             }
         } else {
+            // ЭКРАН ЧТЕНИЯ
             Column(modifier = Modifier.fillMaxSize()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -141,16 +138,15 @@ fun TxtReaderScreen(modifier: Modifier = Modifier) {
                 ) {
                     TextButton(
                         onClick = {
-                            isReading = false
-                            fileContent = null
-                            errorMessage = null
+                            viewModel.closeFile()
                         }
                     ) {
                         Text("← Назад", color = PastelPinkDark)
                     }
                 }
-                val content = fileContent
-                if (content != null) {
+
+                // Текст файла
+                uiState.content?.let { content ->
                     Text(
                         text = content,
                         style = MaterialTheme.typography.bodyLarge,
@@ -163,18 +159,5 @@ fun TxtReaderScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
-    }
-}
-
-private fun readTextFromUri(context: Context, uri: Uri): String {
-    val inputStream: InputStream = context.contentResolver.openInputStream(uri)
-        ?: throw Exception("Не удалось открыть файл")
-    try {
-        val reader = inputStream.bufferedReader()
-        return reader.readText()
-
-    }
-    finally {
-        inputStream.close()
     }
 }
